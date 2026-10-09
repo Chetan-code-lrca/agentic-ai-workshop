@@ -40,6 +40,8 @@ class ToolRegistry:
         tool = self._tools.get(call.name)
         if tool is None:
             raise UnknownToolError(f"unknown tool: {call.name}")
+        if not isinstance(call.arguments, dict):
+            raise ToolValidationError("tool arguments must be a dictionary")
         try:
             value = tool.handler(call.arguments)
         except (KeyError, TypeError, ValueError) as exc:
