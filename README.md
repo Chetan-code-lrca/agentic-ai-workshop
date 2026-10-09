@@ -12,7 +12,7 @@ python -m agentic_workshop.demo
 python -m unittest discover -s tests -v
 ```
 
-The demo adds two numbers and multiplies the result. Tool calls are explicit and reproducible.
+The demo adds two numbers, observes the returned sum, and passes that value into a second multiplication call. Tool calls are explicit and reproducible.
 
 ## Workshop tasks
 1. Read `ToolCall`, `ToolResult`, and `ToolRegistry`.
