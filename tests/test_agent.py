@@ -16,6 +16,16 @@ class ToolAgentTests(unittest.TestCase):
     def test_invalid_arguments_are_rejected(self):
         with self.assertRaises(ToolValidationError):
             self.agent.run([ToolCall("add", {"left": True, "right": 1})])
+
+    def test_non_dictionary_arguments_are_rejected(self):
+        with self.assertRaisesRegex(ToolValidationError, "must be a dictionary"):
+            self.agent.run([ToolCall("add", None)])
+
+    def test_large_integer_results_remain_exact(self):
+        large_integer = 2**53 + 1
+        result = self.agent.run([ToolCall("add", {"left": large_integer, "right": 0})])
+        self.assertEqual(result[0].value, large_integer)
+        self.assertIsInstance(result[0].value, int)
     def test_plan_cannot_exceed_step_limit(self):
         plan = [ToolCall("add", {"left": 1, "right": 1})] * 3
         with self.assertRaises(StepLimitExceeded):
