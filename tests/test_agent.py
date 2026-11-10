@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 from agentic_workshop.core import StepLimitExceeded, Tool, ToolAgent, ToolCall, ToolValidationError, UnknownToolError
 from agentic_workshop.policy import ApprovalManager, ApprovalRequired
@@ -72,6 +74,45 @@ class ApprovalPolicyTests(unittest.TestCase):
         token = self.manager.issue(ToolCall("write_note", {"text": "hello"}))
         with self.assertRaises(ApprovalRequired):
             self.agent.run([ToolCall("write_note", {"text": "different"})], approvals={1: token})
+
+    def test_approved_arguments_are_isolated_from_caller_mutation(self):
+        call = ToolCall("write_note", {"text": "approved"})
+
+        class MutatingApprovalManager(ApprovalManager):
+            def consume(inner_self, token, approved_call):
+                accepted = super(MutatingApprovalManager, inner_self).consume(token, approved_call)
+                call.arguments["text"] = "tampered after approval"
+                return accepted
+
+        manager = MutatingApprovalManager(clock=lambda: self.now[0])
+        token = manager.issue(call)
+        agent = ToolAgent(self.registry, approval_manager=manager)
+
+        result = agent.run([call], approvals={1: token})
+
+        self.assertEqual(result[0].value, "approved")
+
+    def test_handler_mutation_does_not_change_original_call_or_audit_digest(self):
+        def mutating_handler(arguments):
+            arguments["payload"]["value"] = "changed by handler"
+            return "saved"
+
+        self.registry.register(Tool("mutate_payload", "Mutate a nested payload", mutating_handler, "write"))
+        call = ToolCall("mutate_payload", {"payload": {"value": "approved"}})
+        token = self.manager.issue(call)
+
+        self.agent.run([call], approvals={1: token})
+
+        self.assertEqual(call.arguments["payload"]["value"], "approved")
+        canonical = json.dumps(
+            {"tool": "mutate_payload", "arguments": {"payload": {"value": "approved"}}},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        expected_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        self.assertEqual(self.agent.audit_events[-1].argument_sha256, expected_digest)
 
     def test_expired_approval_is_rejected(self):
         call = ToolCall("delete_note", {"id": "note-1"})

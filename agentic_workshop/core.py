@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
@@ -72,7 +73,11 @@ class ToolRegistry:
         if not isinstance(call.arguments, dict):
             raise ToolValidationError("tool arguments must be a dictionary")
         try:
-            value = tool.handler(call.arguments)
+            handler_arguments = deepcopy(call.arguments)
+        except Exception as exc:
+            raise ToolValidationError(f"arguments for {call.name} could not be copied safely") from exc
+        try:
+            value = tool.handler(handler_arguments)
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolValidationError(f"invalid arguments for {call.name}: {exc}") from exc
         return ToolResult(tool_name=tool.name, value=value)
@@ -110,13 +115,21 @@ class ToolAgent:
             if step > self.max_steps:
                 raise StepLimitExceeded(f"plan exceeded the {self.max_steps}-step limit")
             tool = self.registry.get(call.name)
+            try:
+                # ToolCall is frozen, but its nested argument dictionary is not.
+                # Snapshot it before approval so later caller mutations cannot
+                # change the operation that is ultimately executed or audited.
+                approved_call = ToolCall(call.name, deepcopy(call.arguments))
+            except Exception as exc:
+                raise ToolValidationError("tool arguments could not be copied safely") from exc
             if tool.risk_level != "read":
                 token = approvals.get(step)
-                approved = self.approval_manager is not None and self.approval_manager.consume(token, call)
+                approval_call = ToolCall(approved_call.name, deepcopy(approved_call.arguments))
+                approved = self.approval_manager is not None and self.approval_manager.consume(token, approval_call)
                 if not approved:
-                    self.audit_events.append(make_audit_event(trace_id, step, call, tool.risk_level, "blocked"))
-                    raise ApprovalRequired(f"tool '{call.name}' requires a valid one-time approval for this exact call")
-            result = self.registry.execute(call)
-            self.audit_events.append(make_audit_event(trace_id, step, call, tool.risk_level, "executed"))
+                    self.audit_events.append(make_audit_event(trace_id, step, approved_call, tool.risk_level, "blocked"))
+                    raise ApprovalRequired(f"tool '{approved_call.name}' requires a valid one-time approval for this exact call")
+            result = self.registry.execute(approved_call)
+            self.audit_events.append(make_audit_event(trace_id, step, approved_call, tool.risk_level, "executed"))
             results.append(result)
         return results
